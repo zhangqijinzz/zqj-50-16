@@ -14,10 +14,12 @@ const FILTERS: { key: FilterKey; label: string; emoji: string }[] = [
 
 function replaceIngredientInStep(
   step: string,
-  replacements: Record<string, IngredientSubstitution>
+  replacements: Record<string, IngredientSubstitution>,
+  matchedIngredientIds: string[]
 ): string {
   let result = step;
   for (const [ingredientId, sub] of Object.entries(replacements)) {
+    if (matchedIngredientIds.includes(ingredientId)) continue;
     const ing = getIngredientById(ingredientId);
     if (!ing) continue;
     result = result.replaceAll(ing.name, sub.substituteName);
@@ -215,7 +217,14 @@ function RecipeCard({
     return { id, ing, sub, isReplaced };
   });
 
-  const replacedIngredientIds = Object.keys(replacements);
+  const effectiveReplacements = Object.fromEntries(
+    Object.entries(replacements).filter(([id]) => !matchedIngredients.includes(id))
+  );
+  const replacedButStillMissingIds = Object.keys(effectiveReplacements);
+
+  const hasMissingIngredients = allMissingWithSubs.filter(x => !x.isReplaced).length > 0;
+  const hasReplacedButMissing = replacedButStillMissingIds.length > 0;
+  const shouldShowMissingSection = hasMissingIngredients || hasReplacedButMissing;
 
   return (
     <motion.div
@@ -292,7 +301,7 @@ function RecipeCard({
                 {requiredIngredients.slice(0, 5).map((id) => {
                   const ing = getIngredientById(id);
                   const matched = matchedIngredients.includes(id);
-                  const isReplaced = replacedIngredientIds.includes(id);
+                  const isReplaced = replacedButStillMissingIds.includes(id);
                   if (!ing) return null;
                   return (
                     <span
@@ -306,7 +315,7 @@ function RecipeCard({
                       }`}
                     >
                       <span>{ing.emoji}</span>
-                      {isReplaced ? replacements[id].substituteName : ing.name}
+                      {isReplaced ? effectiveReplacements[id].substituteName : ing.name}
                     </span>
                   );
                 })}
@@ -330,44 +339,42 @@ function RecipeCard({
               className="overflow-hidden border-t border-cream-200"
             >
               <div className="p-5 pt-4 space-y-5">
-                {(allMissingWithSubs.length > 0 || replacedIngredientIds.length > 0) && (
+                {shouldShowMissingSection && (
                   <div className="bg-warn/5 border border-warn/20 rounded-2xl p-4">
                     <div className="flex items-center gap-2 text-warn-dark text-xs font-medium mb-3">
                       <AlertCircle size={14} />
                       缺少的食材
                     </div>
                     <div className="space-y-2.5">
-                      {replacedIngredientIds
-                        .filter((id) => !matchedIngredients.includes(id))
-                        .map((id) => {
-                          const ing = getIngredientById(id);
-                          const sub = replacements[id];
-                          if (!ing || !sub) return null;
-                          return (
-                            <div
-                              key={id}
-                              className="flex items-center gap-2 px-3 py-2 rounded-xl bg-brand-50 border border-brand-200"
+                      {replacedButStillMissingIds.map((id) => {
+                        const ing = getIngredientById(id);
+                        const sub = effectiveReplacements[id];
+                        if (!ing || !sub) return null;
+                        return (
+                          <div
+                            key={id}
+                            className="flex items-center gap-2 px-3 py-2 rounded-xl bg-brand-50 border border-brand-200"
+                          >
+                            <span className="text-base">{ing.emoji}</span>
+                            <span className="text-xs text-gray-400 line-through">{ing.name}</span>
+                            <ArrowRight size={12} className="text-brand-400 flex-shrink-0" />
+                            <span className="text-xs font-medium text-brand-600">{sub.substituteName}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-brand-500 text-white font-medium ml-auto flex-shrink-0">
+                              已替换
+                            </span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                undoSubstitution(recipe.id, id);
+                              }}
+                              className="text-[10px] text-gray-400 hover:text-danger flex items-center gap-0.5 flex-shrink-0 transition-colors"
                             >
-                              <span className="text-base">{ing.emoji}</span>
-                              <span className="text-xs text-gray-400 line-through">{ing.name}</span>
-                              <ArrowRight size={12} className="text-brand-400 flex-shrink-0" />
-                              <span className="text-xs font-medium text-brand-600">{sub.substituteName}</span>
-                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-brand-500 text-white font-medium ml-auto flex-shrink-0">
-                                已替换
-                              </span>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  undoSubstitution(recipe.id, id);
-                                }}
-                                className="text-[10px] text-gray-400 hover:text-danger flex items-center gap-0.5 flex-shrink-0 transition-colors"
-                              >
-                                <Undo2 size={10} />
-                                撤销
-                              </button>
-                            </div>
-                          );
-                        })}
+                              <Undo2 size={10} />
+                              撤销
+                            </button>
+                          </div>
+                        );
+                      })}
                       {allMissingWithSubs.map(({ id, ing, sub, isReplaced }) => {
                         if (!ing) return null;
                         if (isReplaced) return null;
@@ -417,7 +424,7 @@ function RecipeCard({
                   </div>
                   <ol className="space-y-3">
                     {steps.map((step, i) => {
-                      const displayStep = replaceIngredientInStep(step, replacements);
+                      const displayStep = replaceIngredientInStep(step, effectiveReplacements, matchedIngredients);
                       const hasReplacement = displayStep !== step;
                       return (
                         <motion.li
