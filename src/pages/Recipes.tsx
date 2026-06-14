@@ -2,8 +2,8 @@ import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useStore, getIngredientById } from '@/store/useStore';
 import { Link } from 'react-router-dom';
-import { Clock, ChefHat, X, ChevronDown, ChevronUp, Filter, Sparkles, UtensilsCrossed, AlertCircle, Carrot } from 'lucide-react';
-import type { MatchedRecipe, FilterKey } from '@/types';
+import { Clock, ChefHat, X, ChevronDown, Filter, Sparkles, UtensilsCrossed, AlertCircle, Carrot, ArrowRight, Undo2, Replace } from 'lucide-react';
+import type { MatchedRecipe, FilterKey, IngredientSubstitution } from '@/types';
 
 const FILTERS: { key: FilterKey; label: string; emoji: string }[] = [
   { key: 'onePot', label: '一锅优先', emoji: '🍲' },
@@ -11,6 +11,19 @@ const FILTERS: { key: FilterKey; label: string; emoji: string }[] = [
   { key: 'lessDishes', label: '少洗碗', emoji: '🧽' },
   { key: 'vegetarian', label: '素食', emoji: '🥗' },
 ];
+
+function replaceIngredientInStep(
+  step: string,
+  replacements: Record<string, IngredientSubstitution>
+): string {
+  let result = step;
+  for (const [ingredientId, sub] of Object.entries(replacements)) {
+    const ing = getIngredientById(ingredientId);
+    if (!ing) continue;
+    result = result.replaceAll(ing.name, sub.substituteName);
+  }
+  return result;
+}
 
 export function Recipes() {
   const { getFilteredRecipes, getMatchedRecipes, preferences, togglePreference, stockIngredients } = useStore();
@@ -171,7 +184,15 @@ function RecipeCard({
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const {
+    applySubstitution,
+    undoSubstitution,
+    getReplacementsForRecipe,
+    getSubstitutionForIngredient,
+  } = useStore();
+
   const { matchPercentage, tags, cookTimeMinutes, potCount, coverEmoji, name, description, requiredIngredients, matchedIngredients, missingIngredients, steps } = recipe;
+  const replacements = getReplacementsForRecipe(recipe.id);
 
   const matchColor =
     matchPercentage >= 80
@@ -186,6 +207,15 @@ function RecipeCard({
       : matchPercentage >= 50
       ? 'stroke-warn'
       : 'stroke-brand-400';
+
+  const allMissingWithSubs = missingIngredients.map((id) => {
+    const ing = getIngredientById(id);
+    const sub = getSubstitutionForIngredient(id);
+    const isReplaced = !!replacements[id];
+    return { id, ing, sub, isReplaced };
+  });
+
+  const replacedIngredientIds = Object.keys(replacements);
 
   return (
     <motion.div
@@ -262,6 +292,7 @@ function RecipeCard({
                 {requiredIngredients.slice(0, 5).map((id) => {
                   const ing = getIngredientById(id);
                   const matched = matchedIngredients.includes(id);
+                  const isReplaced = replacedIngredientIds.includes(id);
                   if (!ing) return null;
                   return (
                     <span
@@ -269,11 +300,13 @@ function RecipeCard({
                       className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] ${
                         matched
                           ? 'bg-fresh/10 text-fresh-dark'
+                          : isReplaced
+                          ? 'bg-brand-100 text-brand-600'
                           : 'bg-gray-100 text-gray-400 line-through'
                       }`}
                     >
                       <span>{ing.emoji}</span>
-                      {ing.name}
+                      {isReplaced ? replacements[id].substituteName : ing.name}
                     </span>
                   );
                 })}
@@ -297,24 +330,80 @@ function RecipeCard({
               className="overflow-hidden border-t border-cream-200"
             >
               <div className="p-5 pt-4 space-y-5">
-                {missingIngredients.length > 0 && (
+                {(allMissingWithSubs.length > 0 || replacedIngredientIds.length > 0) && (
                   <div className="bg-warn/5 border border-warn/20 rounded-2xl p-4">
-                    <div className="flex items-center gap-2 text-warn-dark text-xs font-medium mb-2">
+                    <div className="flex items-center gap-2 text-warn-dark text-xs font-medium mb-3">
                       <AlertCircle size={14} />
-                      还需要这些食材
+                      缺少的食材
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      {missingIngredients.map((id) => {
-                        const ing = getIngredientById(id);
+                    <div className="space-y-2.5">
+                      {replacedIngredientIds
+                        .filter((id) => !matchedIngredients.includes(id))
+                        .map((id) => {
+                          const ing = getIngredientById(id);
+                          const sub = replacements[id];
+                          if (!ing || !sub) return null;
+                          return (
+                            <div
+                              key={id}
+                              className="flex items-center gap-2 px-3 py-2 rounded-xl bg-brand-50 border border-brand-200"
+                            >
+                              <span className="text-base">{ing.emoji}</span>
+                              <span className="text-xs text-gray-400 line-through">{ing.name}</span>
+                              <ArrowRight size={12} className="text-brand-400 flex-shrink-0" />
+                              <span className="text-xs font-medium text-brand-600">{sub.substituteName}</span>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-brand-500 text-white font-medium ml-auto flex-shrink-0">
+                                已替换
+                              </span>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  undoSubstitution(recipe.id, id);
+                                }}
+                                className="text-[10px] text-gray-400 hover:text-danger flex items-center gap-0.5 flex-shrink-0 transition-colors"
+                              >
+                                <Undo2 size={10} />
+                                撤销
+                              </button>
+                            </div>
+                          );
+                        })}
+                      {allMissingWithSubs.map(({ id, ing, sub, isReplaced }) => {
                         if (!ing) return null;
+                        if (isReplaced) return null;
                         return (
-                          <span
+                          <div
                             key={id}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white border border-warn/30 text-xs text-gray-600"
+                            className="flex items-start gap-2 px-3 py-2 rounded-xl bg-white border border-warn/20"
                           >
-                            <span>{ing.emoji}</span>
-                            {ing.name}
-                          </span>
+                            <span className="text-base mt-0.5">{ing.emoji}</span>
+                            <div className="flex-1 min-w-0">
+                              <span className="text-xs text-gray-600 font-medium">{ing.name}</span>
+                              {sub ? (
+                                <div className="flex items-center gap-1.5 mt-1">
+                                  <Replace size={10} className="text-brand-400 flex-shrink-0" />
+                                  <span className="text-[11px] text-gray-400">
+                                    没有{ing.name}？{sub.tip}
+                                  </span>
+                                </div>
+                              ) : (
+                                <div className="mt-1">
+                                  <span className="text-[11px] text-gray-300">暂无替代方案</span>
+                                </div>
+                              )}
+                            </div>
+                            {sub && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  applySubstitution(recipe.id, id, sub);
+                                }}
+                                className="flex-shrink-0 text-[10px] font-medium px-2.5 py-1 rounded-full bg-brand-500 text-white hover:bg-brand-600 active:scale-95 transition-all"
+                              >
+                                使用替代
+                              </button>
+                            )}
+                          </div>
                         );
                       })}
                     </div>
@@ -327,20 +416,35 @@ function RecipeCard({
                     烹饪步骤
                   </div>
                   <ol className="space-y-3">
-                    {steps.map((step, i) => (
-                      <motion.li
-                        key={i}
-                        initial={{ opacity: 0, x: -10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: i * 0.05 }}
-                        className="flex gap-3"
-                      >
-                        <div className="flex-shrink-0 w-6 h-6 rounded-full bg-gradient-to-br from-brand-500 to-brand-400 text-white text-xs font-bold flex items-center justify-center shadow-soft">
-                          {i + 1}
-                        </div>
-                        <p className="text-sm text-gray-600 pt-0.5 flex-1">{step}</p>
-                      </motion.li>
-                    ))}
+                    {steps.map((step, i) => {
+                      const displayStep = replaceIngredientInStep(step, replacements);
+                      const hasReplacement = displayStep !== step;
+                      return (
+                        <motion.li
+                          key={i}
+                          initial={{ opacity: 0, x: -10 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: i * 0.05 }}
+                          className="flex gap-3"
+                        >
+                          <div className="flex-shrink-0 w-6 h-6 rounded-full bg-gradient-to-br from-brand-500 to-brand-400 text-white text-xs font-bold flex items-center justify-center shadow-soft">
+                            {i + 1}
+                          </div>
+                          <p className="text-sm text-gray-600 pt-0.5 flex-1">
+                            {hasReplacement ? (
+                              <span>
+                                {displayStep}
+                                <span className="inline-flex items-center ml-1 px-1 py-0 rounded text-[9px] bg-brand-100 text-brand-500 font-medium align-middle">
+                                  替代
+                                </span>
+                              </span>
+                            ) : (
+                              step
+                            )}
+                          </p>
+                        </motion.li>
+                      );
+                    })}
                   </ol>
                 </div>
 

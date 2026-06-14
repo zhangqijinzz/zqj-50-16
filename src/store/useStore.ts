@@ -9,14 +9,17 @@ import type {
   UserPreferences,
   Ingredient,
   IngredientCategory,
+  IngredientSubstitution,
 } from '@/types';
 import { INGREDIENTS, INGREDIENT_MAP } from '@/data/ingredients';
 import { RECIPES } from '@/data/recipes';
+import { SUBSTITUTIONS } from '@/data/substitutions';
 
 interface StoreState {
   stockIngredients: StockIngredient[];
   preferences: UserPreferences;
   customIngredients: Ingredient[];
+  replacements: Record<string, Record<string, IngredientSubstitution>>;
 
   addStockIngredient: (ingredientId: string, purchaseDate?: string) => void;
   removeStockIngredient: (ingredientId: string) => void;
@@ -24,6 +27,10 @@ interface StoreState {
   updatePurchaseDate: (ingredientId: string, purchaseDate: string) => void;
   togglePreference: (key: keyof UserPreferences) => void;
   addCustomIngredient: (ingredient: Ingredient) => void;
+  applySubstitution: (recipeId: string, ingredientId: string, substitution: IngredientSubstitution) => void;
+  undoSubstitution: (recipeId: string, ingredientId: string) => void;
+  getReplacementsForRecipe: (recipeId: string) => Record<string, IngredientSubstitution>;
+  getSubstitutionForIngredient: (ingredientId: string) => IngredientSubstitution | undefined;
 
   getAllIngredients: () => Ingredient[];
   getIngredientsByCategory: (category: IngredientCategory) => Ingredient[];
@@ -68,6 +75,7 @@ export const useStore = create<StoreState>()(
       stockIngredients: [],
       preferences: initialPreferences,
       customIngredients: [],
+      replacements: {},
 
       addStockIngredient: (ingredientId, purchaseDate) => {
         const base = INGREDIENT_MAP[ingredientId] ||
@@ -115,6 +123,40 @@ export const useStore = create<StoreState>()(
         set({ customIngredients: [...get().customIngredients, ingredient] });
       },
 
+      applySubstitution: (recipeId, ingredientId, substitution) => {
+        const current = get().replacements;
+        const recipeReplacements = current[recipeId] || {};
+        set({
+          replacements: {
+            ...current,
+            [recipeId]: {
+              ...recipeReplacements,
+              [ingredientId]: substitution,
+            },
+          },
+        });
+      },
+
+      undoSubstitution: (recipeId, ingredientId) => {
+        const current = get().replacements;
+        const recipeReplacements = current[recipeId] || {};
+        const { [ingredientId]: _, ...rest } = recipeReplacements;
+        set({
+          replacements: {
+            ...current,
+            [recipeId]: rest,
+          },
+        });
+      },
+
+      getReplacementsForRecipe: (recipeId) => {
+        return get().replacements[recipeId] || {};
+      },
+
+      getSubstitutionForIngredient: (ingredientId) => {
+        return SUBSTITUTIONS[ingredientId];
+      },
+
       getAllIngredients: () => {
         return [...INGREDIENTS, ...get().customIngredients];
       },
@@ -156,6 +198,7 @@ export const useStore = create<StoreState>()(
 
       getMatchedRecipes: () => {
         const stockIds = get().getStockIds();
+        const allReplacements = get().replacements;
         const matched: MatchedRecipe[] = [];
 
         for (const recipe of RECIPES) {
@@ -164,11 +207,23 @@ export const useStore = create<StoreState>()(
           );
           if (matchedIds.length === 0) continue;
 
-          const matchPercentage = Math.round(
-            (matchedIds.length / recipe.requiredIngredients.length) * 100
+          const recipeReplacements = allReplacements[recipe.id] || {};
+          const replacedIds = Object.keys(recipeReplacements).filter(
+            (id) => recipe.requiredIngredients.includes(id)
+          );
+
+          let replacementBoost = 0;
+          for (const id of replacedIds) {
+            replacementBoost += recipeReplacements[id].matchBoost;
+          }
+
+          const totalMatched = matchedIds.length + replacementBoost;
+          const matchPercentage = Math.min(
+            100,
+            Math.round((totalMatched / recipe.requiredIngredients.length) * 100)
           );
           const missingIds = recipe.requiredIngredients.filter(
-            (id) => !stockIds.includes(id)
+            (id) => !stockIds.includes(id) && !recipeReplacements[id]
           );
 
           matched.push({
@@ -220,6 +275,7 @@ export const useStore = create<StoreState>()(
         stockIngredients: state.stockIngredients,
         preferences: state.preferences,
         customIngredients: state.customIngredients,
+        replacements: state.replacements,
       }),
     }
   )

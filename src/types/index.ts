@@ -53,4 +53,10 @@ export interface UserPreferences {
   vegetarian: boolean;
 }
 
+export interface IngredientSubstitution {
+  substituteName: string;
+  tip: string;
+  matchBoost: number;
+}
+
 export type FilterKey = 'onePot' | 'quickMeal' | 'lessDishes' | 'vegetarian';
